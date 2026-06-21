@@ -1,0 +1,3 @@
+/usr/bin/cmake -E rm -f CMakeFiles/LO-RAT.dir/objects.a
+/usr/bin/x86_64-w64-mingw32-ar qc CMakeFiles/LO-RAT.dir/objects.a @CMakeFiles/LO-RAT.dir/objects1.rsp
+/usr/bin/x86_64-w64-mingw32-g++ -static -static-libgcc -static-libstdc++ -O2 -s -D_WIN32_WINNT=0x0602 -DWIN32_LEAN_AND_MEAN -O3 -DNDEBUG -mwindows -static -static-libgcc -static-libstdc++ -s -Wl,--subsystem,windows -Wl,--whole-archive CMakeFiles/LO-RAT.dir/objects.a -Wl,--no-whole-archive -o LO-RAT.exe -Wl,--out-implib,libLO-RAT.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles/LO-RAT.dir/linkLibs.rsp

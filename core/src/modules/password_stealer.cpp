@@ -4,6 +4,7 @@
 #include "../beacon.h"
 #include <windows.h>
 #include <wincrypt.h>
+#include <wincred.h>
 #include <shlobj.h>
 #include "../../libs/sqlite3/sqlite3.h"
 

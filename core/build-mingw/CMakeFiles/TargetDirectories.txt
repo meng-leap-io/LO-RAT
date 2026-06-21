@@ -1,0 +1,3 @@
+/workspaces/anacondo/core/build-mingw/CMakeFiles/LO-RAT.dir
+/workspaces/anacondo/core/build-mingw/CMakeFiles/edit_cache.dir
+/workspaces/anacondo/core/build-mingw/CMakeFiles/rebuild_cache.dir
